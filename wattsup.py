@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python2.7 -tt
 """Watts Up? Pro/.Net meter logger (https://www.wattsupmeters.com).
 
 This script reads meter values and saves the read data as CSV files.
@@ -14,7 +14,7 @@ YYYY-MM-DD HH:MM:SS.ssssss, W, V, A, WH, Cost, WH/Mo, Cost/Mo, Wmax, Vmax, Amax,
 
 Author: Yongpil Yoon
 Copyright: Yongpil Yoon 2015
-Version: 0.1.0
+Version: 0.1.1
 License: GPLv3
 
   This program is free software: you can redistribute it and/or
@@ -59,16 +59,17 @@ class WattsUp(object):
   
   def getRawLine(self):
     """Return the read values as a list"""
-    line = self.serialPort.readline()
-    fields = line.split(',')
+    fields = self.serialPort.readline().split(',')
+    while len(fields) < 21:
+      fields = self.serialPort.readline().split(',')
     return fields
 
   def getFormattedLine(self):
     """Return the read values in appropriate formats as a list"""
     fields = self.getRawLine()
-    if len(fields) != 21:
-      fields = self.getRawLine()
     #format
+    fields[1] = self.name
+    fields[2] = datetime.datetime.now()
     fields[3] = str(int(fields[3]) / 10.0)
     fields[4] = str(int(fields[4]) / 10.0)
     fields[5] = str(int(fields[5]) / 1000.0)
@@ -87,7 +88,7 @@ class WattsUp(object):
     # fields[18] = fields[18]
     fields[19] = str(int(fields[19]) / 10.0)
     fields[20] = str(int(fields[20].replace(';\r\n', '')))
-    return fields
+    return fields[1:]
 
   def log(self, rawOutput, logfilePrefix):
     """Prints the read valuse on stdout and saves as CSV files
@@ -98,8 +99,9 @@ class WattsUp(object):
     try:
       self.serialPort.write('#L,W,3,E,,%d;' % self.interval)
       elapsedTime = 0
-      logfile = open(logfilePrefix + self.name + '.csv', 'w')
-      logfile.write('Time, W, V, A, WH, Cost, WH/Mo, Cost/Mo, Wmax, Vmax, Amax, Wmin, Vmin, Amin, PF, DC, PC, HZ, VA\n')
+      logfile = open(logfilePrefix + '-' + self.name + '.csv', 'w')
+      logfile.write('Meter, Time, W, V, A, WH, Cost, WH/Mo, Cost/Mo, Wmax, Vmax, Amax, Wmin, Vmin, Amin, PF, DC, PC, HZ, VA\n')
+      sys.stdout.write('Meter, Time, W, V, A, WH, Cost, WH/Mo, Cost/Mo, Wmax, Vmax, Amax, Wmin, Vmin, Amin, PF, DC, PC, HZ, VA\n')
       while True:
         if elapsedTime > self.duration:
           break
@@ -109,16 +111,15 @@ class WattsUp(object):
         else:
           fields = self.getFormattedLine()
 
-        if len(fields) != 21:
+        if len(fields) < 20:
           continue
 
-        logfile.write('%s' % datetime.datetime.now())
-        for i in range(3, len(fields)):
-          logfile.write(', %s' % fields[i])
+        for field in fields:
+          sys.stdout.write(str(field) + ', ')
+          logfile.write('%s, ' % field)
+        sys.stdout.write('\n')
+        sys.stdout.flush()
         logfile.write('\n')
-
-        print ' duration: ' + str(self.duration) + ' elapsedTime: ' + str(elapsedTime)
-        print self.name + ':', fields
 
         elapsedTime += self.interval
 
@@ -135,6 +136,54 @@ class WattsUp(object):
       self.serialPort.close()
       print '\nKeyboardInterrupt in logger, saving log file for: ', logfile.name
       # close file
+
+  def clear(self):
+    """Clears the internal memory of meters and starts logging to the internal memory
+    """
+    #clear internal memory
+    self.serialPort.write('#R,W,0;')
+
+    #start internal logging
+    self.serialPort.write('#L,W,3,I,,1;')
+
+    self.serialPort.close()
+    print 'Memory cleared! :', self.name
+
+  def fetch(self, rawOutput, logfilePrefix):
+    """Fetches the saved data from the internal memory of meters
+    and saves as CSV files
+    Keyword arguments:
+    rawOutput -- (bool) saves raw output if True
+    logfilePrefix -- (str) prefix of logfile name
+    """
+    #fetch logged data
+    self.serialPort.write('#D,R,0;')
+
+    logfile = open(logfilePrefix + '-' + self.name + '.csv', 'w')
+    count = 0
+    while count == 0:
+      fields = self.serialPort.readline().split(',')
+      for field in fields:
+        if '#n' in field:
+          count = int(fields[-1].split(';')[0])
+          break
+
+    for i in range(count):
+      fields = []
+      if rawOutput:
+        fields = self.getRawLine()
+      else:
+        fields = self.getFormattedLine()
+
+      for field in fields:
+        logfile.write('%s, ' % field)
+      logfile.write('\n')
+      sys.stdout.write('\rSaving (%s): %d out of %d lines' % (logfile.name, int(i + 1), count))
+      sys.stdout.flush()
+
+    sys.stdout.write('\nDone!\n')
+    logfile.close()
+    self.serialPort.close()
 
 def scanPorts():
   """Return (list of str) paths to serial port device files"""
@@ -185,9 +234,48 @@ def main(args, parser):
   elif not checkPorts(args.ports):
     sys.exit(1)
 
-  if not args.auto:
+  if args.clear and args.fetch:
+    sys.stdout.write('--clear (-c) and --fetch (-f) cannot be used together!\n\n')
+    parser.print_help()
+    sys.exit(1)
+
+  meters = []
+  for port in args.ports:
+    meters.append(WattsUp(port, args.interval, args.duration))
+
+  if args.clear:
+    for meter in meters:
+      if not args.yes:
+        sys.stdout.write('Clear the internal memory of ' + meter.name + ' (Y/n)? ')
+        selection = raw_input()
+        if selection.lower() == 'n':
+          sys.stdout.write('Cancelled.\n')
+          continue
+        else:
+          meter.clear()
+      else:
+        sys.stdout.write('Clearing the internal memory of all meters...\n')
+        meter.clear()
+    sys.exit(0)
+
+  if args.fetch:
+    for meter in meters:
+      if not args.yes:
+        sys.stdout.write('Fetch logged data from ' + meter.name + ' (Y/n)? ')
+        selection = raw_input()
+        if selection.lower() == 'n':
+          sys.stdout.write('Cancelled.\n')
+          continue
+        else:
+          meter.fetch(args.raw, args.prefix)
+      else:
+        sys.stdout.write('Fetching the data from all meters...\n')
+        meter.fetch(args.raw, args.prefix)
+    sys.exit(0)
+
+  if not args.yes:
     # Confirm if the options are right
-    print 'Metres:', args.ports
+    print 'Meters:', args.ports
     print 'Logging duration:', args.duration, 'minute(s)'
     print 'Reading interval:', args.interval, 'second(s)'
     print 'Logfilename prefix:', args.prefix
@@ -201,9 +289,8 @@ def main(args, parser):
 
   # Create WattsUp objects and processes (logger)
   loggers = []
-  for port in args.ports:
-    metre = WattsUp(port, args.interval, args.duration)
-    logger = multiprocessing.Process(target=metre.log, args=(args.raw, args.prefix,))
+  for meter in meters:
+    logger = multiprocessing.Process(target=meter.log, args=(args.raw, args.prefix,))
     loggers.append(logger)
     # logger.start()
 
@@ -216,7 +303,7 @@ def main(args, parser):
     for logger in loggers:
       logger.join()
   except KeyboardInterrupt:
-      print 'Quitting...'
+      print 'Quitting...(main)'
 
 
 if __name__ == '__main__':
@@ -227,7 +314,9 @@ if __name__ == '__main__':
   parser.add_argument('-i', '--interval', dest='interval', default=1, type=int, help='Reading interval in seconds (default 1 second)')
   parser.add_argument('-o', '--outfile-prefix', dest='prefix', default='WU-' + datetime.date.today().isoformat(), help='Prefix of output files')
   parser.add_argument('-r', '--raw', dest='raw', action='store_true', default=False, help='Save raw data')
-  parser.add_argument('-a', '--auto', dest='auto', action='store_true', default=False, help='Start logging without confirmation')
+  parser.add_argument('-y', '--yes', dest='yes', action='store_true', default=False, help='Yes to all confirmations')
+  parser.add_argument('-c', '--clear', dest='clear', action='store_true', default=False, help='Clear the internal memory')
+  parser.add_argument('-f', '--fetch', dest='fetch', action='store_true', default=False, help='Fetch all data logged in the internal memory')
   args = parser.parse_args()
   try:
     main(args, parser)
