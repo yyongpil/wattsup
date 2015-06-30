@@ -87,7 +87,10 @@ class WattsUp(object):
     # fields[17] = fields[17]
     # fields[18] = fields[18]
     fields[19] = str(int(fields[19]) / 10.0)
-    fields[20] = str(int(fields[20].replace(';\r\n', '')))
+    if len(fields) is 21:
+      fields[20] = str(int(fields[20].replace(';\r\n', '')))
+    elif len(fields) is 22:
+      fields[21] = str(int(fields[21].replace(';\r\n', '')))
     return fields[1:]
 
   def log(self, rawOutput, logfilePrefix):
@@ -156,6 +159,7 @@ class WattsUp(object):
     rawOutput -- (bool) saves raw output if True
     logfilePrefix -- (str) prefix of logfile name
     """
+    currentTime = datetime.datetime.now()
     #fetch logged data
     self.serialPort.write('#D,R,0;')
 
@@ -168,18 +172,25 @@ class WattsUp(object):
           count = int(fields[-1].split(';')[0])
           break
 
+    diffSecs = datetime.timedelta(seconds = count * self.interval)
+    timeIncrement = datetime.timedelta(seconds = self.interval)
+    startTime = datetime.datetime.now() - diffSecs
+
     for i in range(count):
       fields = []
       if rawOutput:
         fields = self.getRawLine()
       else:
         fields = self.getFormattedLine()
+      fields[1] = startTime
 
       for field in fields:
         logfile.write('%s, ' % field)
       logfile.write('\n')
       sys.stdout.write('\rSaving (%s): %d out of %d lines' % (logfile.name, int(i + 1), count))
       sys.stdout.flush()
+
+      startTime = startTime + timeIncrement
 
     sys.stdout.write('\nDone!\n')
     logfile.close()
