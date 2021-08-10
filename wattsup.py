@@ -1,4 +1,4 @@
-#!/usr/bin/python2.7 -tt
+#!/usr/bin/python3
 """Watts Up? Pro/.Net meter logger (https://www.wattsupmeters.com).
 
 This script reads meter values and saves the read data as CSV files.
@@ -59,9 +59,9 @@ class WattsUp(object):
   
   def getRawLine(self):
     """Return the read values as a list"""
-    fields = self.serialPort.readline().split(',')
+    fields = self.serialPort.readline().decode().split(',')
     while len(fields) < 21:
-      fields = self.serialPort.readline().split(',')
+      fields = self.serialPort.readline().decode().split(',')
     return fields
 
   def getFormattedLine(self):
@@ -87,10 +87,10 @@ class WattsUp(object):
     # fields[17] = fields[17]
     # fields[18] = fields[18]
     fields[19] = str(int(fields[19]) / 10.0)
-    if len(fields) is 21:
-      fields[20] = str(int(fields[20].replace(';\r\n', '')))
-    elif len(fields) is 22:
-      fields[21] = str(int(fields[21].replace(';\r\n', '')))
+    if len(fields) == 21:
+      fields[20] = str(int(fields[20].rstrip(';\x00\r\n')))
+    elif len(fields) == 22:
+      fields[21] = str(int(fields[21].rstrip(';\x00\r\n')))
     return fields[1:]
 
   def log(self, rawOutput, logfilePrefix):
@@ -100,7 +100,7 @@ class WattsUp(object):
     logfilePrefix -- (str) prefix of logfile name
     """
     try:
-      self.serialPort.write('#L,W,3,E,,%d;' % self.interval)
+      self.serialPort.write('#L,W,3,E,,%d;'.encode() % self.interval)
       elapsedTime = 0
       logfile = open(logfilePrefix + '-' + self.name + '.csv', 'w')
       logfile.write('Meter, Time, W, V, A, WH, Cost, WH/Mo, Cost/Mo, Wmax, Vmax, Amax, Wmin, Vmin, Amin, PF, DC, PC, HZ, VA\n')
@@ -137,20 +137,33 @@ class WattsUp(object):
       except:
         pass
       self.serialPort.close()
-      print '\nKeyboardInterrupt in logger, saving log file for: ', logfile.name
+      print ('\nKeyboardInterrupt in logger, saving log file for: ', logfile.name)
       # close file
 
   def clear(self):
     """Clears the internal memory of meters and starts logging to the internal memory
     """
     #clear internal memory
-    self.serialPort.write('#R,W,0;')
+    self.serialPort.write('#R,W,0;'.encode())
 
     #start internal logging
-    self.serialPort.write('#L,W,3,I,,1;')
+    self.serialPort.write('#L,W,3,I,,1;'.encode())
 
     self.serialPort.close()
-    print 'Memory cleared! :', self.name
+    print ('Memory cleared! :', self.name)
+    
+  def reset(self):
+    #reset factory defaults
+    self.serialPort.write('#C,W,18,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1;'.encode())
+    self.serialPort.write('#I,Z,0;'.encode())
+    self.serialPort.close()
+    print ('Factory Reset! :', self.name)
+
+  def softreset(self):
+    #soft reset device
+    self.serialPort.write('#V,W,0;'.encode())
+    self.serialPort.close()
+    print ('Soft Reset! :', self.name)
 
   def fetch(self, rawOutput, logfilePrefix):
     """Fetches the saved data from the internal memory of meters
@@ -161,12 +174,12 @@ class WattsUp(object):
     """
     currentTime = datetime.datetime.now()
     #fetch logged data
-    self.serialPort.write('#D,R,0;')
+    self.serialPort.write('#D,R,0;'.encode())
 
     logfile = open(logfilePrefix + '-' + self.name + '.csv', 'w')
     count = 0
     while count == 0:
-      fields = self.serialPort.readline().split(',')
+      fields = self.serialPort.readline().decode().split(',')
       for field in fields:
         if '#n' in field:
           count = int(fields[-1].split(';')[0])
@@ -202,7 +215,7 @@ def scanPorts():
   fileName = 'tty.usbserial-*' if system == 'Darwin' else ('ttyUSB*' if system == 'Linux' else '')
 
   if fileName == '':
-    print '\nThis operating system is not supported!'
+    print ('\nThis operating system is not supported!')
     exit(1)
 
   ports = []
@@ -212,10 +225,10 @@ def scanPorts():
       ports.append('/dev/' + file)
 
   if len(ports) == 0:
-    print '\nWatts Up? meter not found!'
-    print '* Please connect your meters.'
-    print '* FTDI drivers have to be installed. (http://www.ftdichip.com/Drivers/VCP.htm)'
-    print '* Run', str(__file__).split('/')[-1], '--help (-h) for help\n'
+    print ('\nWatts Up? meter not found!')
+    print ('* Please connect your meters.')
+    print ('* FTDI drivers have to be installed. (http://www.ftdichip.com/Drivers/VCP.htm)')
+    print ('* Run', str(__file__).split('/')[-1], '--help (-h) for help\n')
     exit(1)
 
   return ports
@@ -228,7 +241,7 @@ def checkPorts(ports):
   result = True
   for port in ports:
     if not os.path.exists(port):
-      print 'Error: Port does not exist: ' + port
+      print ('Error: Port does not exist: ' + port)
       result = False
   return result
 
@@ -258,7 +271,7 @@ def main(args, parser):
     for meter in meters:
       if not args.yes:
         sys.stdout.write('Clear the internal memory of ' + meter.name + ' (Y/n)? ')
-        selection = raw_input()
+        selection = input()
         if selection.lower() == 'n':
           sys.stdout.write('Cancelled.\n')
           continue
@@ -268,12 +281,42 @@ def main(args, parser):
         sys.stdout.write('Clearing the internal memory of all meters...\n')
         meter.clear()
     sys.exit(0)
+    
+  if args.reset:
+    for meter in meters:
+      if not args.yes:
+        sys.stdout.write('Reset factory defaults ' + meter.name + ' (Y/n)? ')
+        selection = input()
+        if selection.lower() == 'n':
+          sys.stdout.write('Cancelled.\n')
+          continue
+        else:
+          meter.reset()
+      else:
+        sys.stdout.write('Resetting factory defaults...\n')
+        meter.reset()
+    sys.exit(0)
+    
+  if args.softreset:
+    for meter in meters:
+      if not args.yes:
+        sys.stdout.write('Soft reset ' + meter.name + ' (Y/n)? ')
+        selection = input()
+        if selection.lower() == 'n':
+          sys.stdout.write('Cancelled.\n')
+          continue
+        else:
+          meter.softreset()
+      else:
+        sys.stdout.write('Soft resetting...\n')
+        meter.softreset()
+    sys.exit(0)
 
   if args.fetch:
     for meter in meters:
       if not args.yes:
         sys.stdout.write('Fetch logged data from ' + meter.name + ' (Y/n)? ')
-        selection = raw_input()
+        selection = input()
         if selection.lower() == 'n':
           sys.stdout.write('Cancelled.\n')
           continue
@@ -286,15 +329,15 @@ def main(args, parser):
 
   if not args.yes:
     # Confirm if the options are right
-    print 'Meters:', args.ports
-    print 'Logging duration:', args.duration, 'minute(s)'
-    print 'Reading interval:', args.interval, 'second(s)'
-    print 'Logfilename prefix:', args.prefix
-    print 'Log raw data:', args.raw
+    print ('Meters:', args.ports)
+    print ('Logging duration:', args.duration, 'minute(s)')
+    print ('Reading interval:', args.interval, 'second(s)')
+    print ('Logfilename prefix:', args.prefix)
+    print ('Log raw data:', args.raw)
     sys.stdout.write('Are the above options correct (Y/n)? ')
-    selection = raw_input()
+    selection = input()
     if selection.lower() == 'n':
-      print ''
+      print ('')
       parser.print_help()
       sys.exit(0)
 
@@ -314,7 +357,7 @@ def main(args, parser):
     for logger in loggers:
       logger.join()
   except KeyboardInterrupt:
-      print 'Quitting...(main)'
+      print ('Quitting...(main)')
 
 
 if __name__ == '__main__':
@@ -328,11 +371,13 @@ if __name__ == '__main__':
   parser.add_argument('-y', '--yes', dest='yes', action='store_true', default=False, help='Yes to all confirmations')
   parser.add_argument('-c', '--clear', dest='clear', action='store_true', default=False, help='Clear the internal memory')
   parser.add_argument('-f', '--fetch', dest='fetch', action='store_true', default=False, help='Fetch all data logged in the internal memory')
+  parser.add_argument('--reset', dest='reset', action='store_true', default=False, help='Reset factory defaults and set chosen fields to all.')
+  parser.add_argument('--soft-reset', dest='softreset', action='store_true', default=False, help='Soft reset the meter')
   args = parser.parse_args()
   try:
     main(args, parser)
   except KeyboardInterrupt:
-    print '\nQuitting...'
+    print ('\nQuitting...')
 
 
 
